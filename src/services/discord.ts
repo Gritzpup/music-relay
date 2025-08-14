@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, REST, Routes, CommandInteraction, GuildMember, AutocompleteInteraction, VoiceChannel } from 'discord.js';
+import { Client, GatewayIntentBits, REST, Routes, CommandInteraction, GuildMember, AutocompleteInteraction, VoiceChannel, MessageFlags } from 'discord.js';
 import { config } from '../config';
 import { logger } from '../utils/logger';
 import { MusicManager } from './musicManager';
@@ -49,7 +49,7 @@ export class DiscordMusicBot {
         logger.error('Error handling interaction:', error);
         if (interaction.isCommand() && !interaction.replied && !interaction.deferred) {
           try {
-            await interaction.reply({ content: 'An error occurred while processing your command.', ephemeral: true });
+            await interaction.reply({ content: 'An error occurred while processing your command.', flags: MessageFlags.Ephemeral });
           } catch (replyError) {
             logger.debug('[Discord] Could not reply to failed interaction:', replyError);
           }
@@ -72,19 +72,19 @@ export class DiscordMusicBot {
     
     switch (interaction.commandName) {
       case 'play': {
-        // Check if user is in a voice channel
-        if (!member.voice.channel) {
-          await interaction.reply({ content: '❌ You need to be in a voice channel!', ephemeral: true });
-          return;
-        }
-
-        const query = (interaction as any).options.get('query')?.value as string;
-        logger.info(`[Discord] Play command received with query: ${query}`);
-        logger.info(`[Discord] Query type: ${query.includes('youtube.com') || query.includes('youtu.be') ? 'YouTube URL' : 'Search term'}`);
-        
         try {
-          // Defer reply as searching might take time
+          // Defer immediately to prevent timeout
           await interaction.deferReply();
+          
+          // Check if user is in a voice channel
+          if (!member.voice.channel) {
+            await this.safeEditReply(interaction, '❌ You need to be in a voice channel!');
+            return;
+          }
+
+          const query = (interaction as any).options.get('query')?.value as string;
+          logger.info(`[Discord] Play command received with query: ${query}`);
+          logger.info(`[Discord] Query type: ${query.includes('youtube.com') || query.includes('youtu.be') ? 'YouTube URL' : 'Search term'}`);
           
           // Send initial progress message
           await this.safeEditReply(interaction, '🔍 Searching for your song...');
@@ -115,7 +115,7 @@ export class DiscordMusicBot {
           logger.error('[Discord] Play command error:', error);
           if (!interaction.deferred && !interaction.replied) {
             try {
-              await interaction.reply({ content: '❌ An error occurred while processing your request.', ephemeral: true });
+              await interaction.reply({ content: '❌ An error occurred while processing your request.', flags: MessageFlags.Ephemeral });
             } catch {
               // Ignore if we can't reply
             }

@@ -175,7 +175,40 @@ export class MusicPlayer {
       'Cookie': '',
     };
     
-    // Method 1: Try ytdl-core first
+    // Method 1: Try play-dl first (most reliable currently)
+    try {
+      logger.info('[Player] Attempting with play-dl...');
+      
+      // Validate with play-dl
+      const validated = await play.validate(url);
+      if (validated !== 'yt_video') {
+        throw new Error(`Not a valid YouTube video URL (type: ${validated})`);
+      }
+      
+      // Get video info
+      const info = await play.video_info(url);
+      if (!info || !info.video_details) {
+        throw new Error('Could not get video details');
+      }
+      
+      logger.info(`[Player] play-dl found video: ${info.video_details.title}`);
+      
+      // Create stream
+      const stream = await play.stream(url, {
+        quality: 2, // highest quality
+      });
+      
+      logger.info('[Player] Successfully created stream with play-dl');
+      return stream.stream;
+    } catch (playError: any) {
+      errors.push({ method: 'play-dl', error: playError });
+      logger.warn('[Player] play-dl failed:', {
+        error: playError.message || String(playError),
+        url: url
+      });
+    }
+    
+    // Method 2: Try ytdl-core as fallback
     try {
       logger.info('[Player] Attempting with ytdl-core...');
       
@@ -204,42 +237,9 @@ export class MusicPlayer {
       return stream;
     } catch (ytdlError: any) {
       errors.push({ method: 'ytdl-core', error: ytdlError });
-      logger.warn('[Player] ytdl-core failed:', {
+      logger.error('[Player] ytdl-core also failed:', {
         error: ytdlError.message || String(ytdlError),
         statusCode: ytdlError.statusCode,
-        url: url
-      });
-    }
-    
-    // Method 2: Try play-dl as fallback
-    try {
-      logger.info('[Player] Attempting with play-dl...');
-      
-      // Validate with play-dl
-      const validated = await play.validate(url);
-      if (validated !== 'yt_video') {
-        throw new Error(`Not a valid YouTube video URL (type: ${validated})`);
-      }
-      
-      // Get video info
-      const info = await play.video_info(url);
-      if (!info || !info.video_details) {
-        throw new Error('Could not get video details');
-      }
-      
-      logger.info(`[Player] play-dl found video: ${info.video_details.title}`);
-      
-      // Create stream
-      const stream = await play.stream(url, {
-        quality: 2, // highest quality
-      });
-      
-      logger.info('[Player] Successfully created stream with play-dl');
-      return stream.stream;
-    } catch (playError: any) {
-      errors.push({ method: 'play-dl', error: playError });
-      logger.error('[Player] play-dl also failed:', {
-        error: playError.message || String(playError),
         url: url
       });
     }
