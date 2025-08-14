@@ -12,9 +12,7 @@ export class DiscordMusicBot {
   private musicManager: MusicManager;
   private lyricsService: LyricsService;
   private autocompleteCache = new Map<string, { results: any[], timestamp: number }>();
-  private autocompleteDebounce = new Map<string, NodeJS.Timeout>();
   private readonly CACHE_DURATION = 30000; // 30 seconds
-  private readonly DEBOUNCE_DELAY = 300; // 300ms
 
   constructor() {
     this.client = new Client({
@@ -185,14 +183,12 @@ export class DiscordMusicBot {
 
   private async handleAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
     const focusedValue = interaction.options.getFocused();
-    const userId = interaction.user.id;
-    const interactionKey = `${userId}-${focusedValue}`;
     
     if (interaction.commandName === 'play') {
       try {
         // Return empty for short queries
         if (!focusedValue || focusedValue.length < 2) {
-          await this.safeRespond(interaction, []);
+          await interaction.respond([]);
           return;
         }
 
@@ -200,86 +196,76 @@ export class DiscordMusicBot {
         const cached = this.autocompleteCache.get(focusedValue.toLowerCase());
         if (cached && Date.now() - cached.timestamp < this.CACHE_DURATION) {
           logger.debug(`[Discord] Using cached results for: "${focusedValue}"`);
-          await this.safeRespond(interaction, cached.results);
+          await interaction.respond(cached.results);
           return;
         }
 
-        // Clear existing debounce for this user
-        const existingDebounce = this.autocompleteDebounce.get(interactionKey);
-        if (existingDebounce) {
-          clearTimeout(existingDebounce);
-        }
-
-        // Set up debounced search
-        const debounceTimeout = setTimeout(async () => {
-          try {
-            logger.info(`[Discord] Searching YouTube for: "${focusedValue}"`);
-            
-            // Search with timeout
-            const searchPromise = YouTube.search(focusedValue, { limit: 5, type: 'video' });
-            const timeoutPromise = new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('Search timeout')), 2000)
-            );
-            
-            const results = await Promise.race([searchPromise, timeoutPromise]) as any[];
-            
-            if (!results || results.length === 0) {
-              await this.safeRespond(interaction, []);
-              return;
-            }
-            
-            const choices = results.map((video: any) => {
-              const url = video.url || video.link || `https://www.youtube.com/watch?v=${video.id}`;
-              return {
-                name: video.title && video.title.length > 100 
-                  ? video.title.substring(0, 97) + '...' 
-                  : (video.title || 'Unknown'),
-                value: url,
-              };
-            });
-
-            // Cache the results
-            this.autocompleteCache.set(focusedValue.toLowerCase(), {
-              results: choices,
-              timestamp: Date.now()
-            });
-
-            // Clean old cache entries
-            this.cleanCache();
-
-            await this.safeRespond(interaction, choices);
-          } catch (searchError) {
-            logger.error('[Discord] Autocomplete search failed:', searchError);
-            await this.safeRespond(interaction, []);
+        // Perform search immediately (no debouncing for autocomplete)
+        try {
+          logger.info(`[Discord] Searching YouTube for: "${focusedValue}"`);
+          
+          // Search with timeout
+          const searchPromise = YouTube.search(focusedValue, { limit: 5, type: 'video' });
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Search timeout')), 2500)
+          );
+          
+          const results = await Promise.race([searchPromise, timeoutPromise]) as any[];
+          logger.info(`[Discord] YouTube search completed, found ${results?.length || 0} results`);
+          
+          if (!results || results.length === 0) {
+            logger.warn(`[Discord] No results found for: "${focusedValue}"`);
+            await interaction.respond([]);
+            return;
           }
+          
+          const choices = results.map((video: any, index: number) => {
+            const url = video.url || video.link || `https://www.youtube.com/watch?v=${video.id}`;
+            logger.debug(`[Discord] Result ${index + 1}: ${video.title} -> ${url}`);
+            return {
+              name: video.title && video.title.length > 100 
+                ? video.title.substring(0, 97) + '...' 
+                : (video.title || 'Unknown'),
+              value: url,
+            };
+          });
 
-          // Remove from debounce map
-          this.autocompleteDebounce.delete(interactionKey);
-        }, this.DEBOUNCE_DELAY);
+          // Cache the results
+          this.autocompleteCache.set(focusedValue.toLowerCase(), {
+            results: choices,
+            timestamp: Date.now()
+          });
 
-        this.autocompleteDebounce.set(interactionKey, debounceTimeout);
-        
-        // For immediate response with empty array to prevent timeout
-        if (!cached) {
-          await this.safeRespond(interaction, []);
+          // Clean old cache entries
+          this.cleanCache();
+
+          logger.info(`[Discord] Sending ${choices.length} autocomplete choices to user`);
+          await interaction.respond(choices);
+        } catch (searchError: any) {
+          logger.error('[Discord] Autocomplete search failed:', {
+            error: searchError.message || String(searchError),
+            stack: searchError.stack,
+            query: focusedValue
+          });
+          
+          // Try to respond with empty array on error
+          try {
+            await interaction.respond([]);
+          } catch {
+            // Interaction already responded or timed out
+          }
         }
       } catch (error: any) {
         logger.error('[Discord] Autocomplete error:', error);
-        await this.safeRespond(interaction, []);
+        try {
+          await interaction.respond([]);
+        } catch {
+          // Interaction already responded or timed out
+        }
       }
     }
   }
 
-  private async safeRespond(interaction: AutocompleteInteraction, choices: any[]): Promise<void> {
-    try {
-      await interaction.respond(choices);
-    } catch (error: any) {
-      // Silently handle errors - interaction likely timed out
-      if (error.code !== 10062 && error.code !== 40060) {
-        logger.debug('[Discord] Failed to respond to autocomplete:', error.message);
-      }
-    }
-  }
 
   private cleanCache(): void {
     const now = Date.now();
