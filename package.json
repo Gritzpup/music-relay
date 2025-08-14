@@ -37,7 +37,6 @@
     "tsx": "^4.20.4",
     "typescript": "^5.9.2",
     "winston": "^3.17.0",
-    "@distube/ytdl-core": "^4.16.12",
     "youtube-sr": "^4.3.11",
     "ytdl-core": "^4.11.5"
   },

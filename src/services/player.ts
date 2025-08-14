@@ -15,7 +15,6 @@ import { QueueItem, Track } from '../types';
 import { config } from '../config';
 import ytdl from 'ytdl-core';
 import play from 'play-dl';
-import distubeYtdl from '@distube/ytdl-core';
 
 export class MusicPlayer {
   private audioPlayer: AudioPlayer;
@@ -176,46 +175,7 @@ export class MusicPlayer {
       'Cookie': '',
     };
     
-    // Method 1: Try @distube/ytdl-core (more maintained fork)
-    try {
-      logger.info('[Player] Attempting with @distube/ytdl-core...');
-      
-      // Validate URL first
-      if (!distubeYtdl.validateURL(url)) {
-        throw new Error('Invalid YouTube URL format');
-      }
-      
-      // Get video info with custom headers
-      const info = await distubeYtdl.getInfo(url, {
-        requestOptions: { headers },
-      });
-      
-      if (!info.videoDetails) {
-        throw new Error('Video details not available');
-      }
-      
-      logger.info(`[Player] @distube/ytdl-core found video: ${info.videoDetails.title}`);
-      
-      // Create stream with optimized settings
-      const stream = distubeYtdl.downloadFromInfo(info, {
-        filter: 'audioonly',
-        quality: 'highestaudio',
-        highWaterMark: 1 << 25, // 32MB buffer
-        dlChunkSize: 0,
-      });
-      
-      logger.info('[Player] Successfully created stream with @distube/ytdl-core');
-      return stream;
-    } catch (distubeError: any) {
-      errors.push({ method: '@distube/ytdl-core', error: distubeError });
-      logger.warn('[Player] @distube/ytdl-core failed:', {
-        error: distubeError.message || String(distubeError),
-        statusCode: distubeError.statusCode,
-        url: url
-      });
-    }
-    
-    // Method 2: Try original ytdl-core
+    // Method 1: Try ytdl-core first
     try {
       logger.info('[Player] Attempting with ytdl-core...');
       
@@ -251,7 +211,7 @@ export class MusicPlayer {
       });
     }
     
-    // Method 3: Try play-dl as last resort
+    // Method 2: Try play-dl as fallback
     try {
       logger.info('[Player] Attempting with play-dl...');
       

@@ -11,6 +11,10 @@ export class DiscordMusicBot {
   private isConnected: boolean = false;
   private musicManager: MusicManager;
   private lyricsService: LyricsService;
+  private autocompleteCache = new Map<string, { results: any[], timestamp: number }>();
+  private autocompleteDebounce = new Map<string, NodeJS.Timeout>();
+  private readonly CACHE_DURATION = 30000; // 30 seconds
+  private readonly DEBOUNCE_DELAY = 300; // 300ms
 
   constructor() {
     this.client = new Client({
@@ -45,11 +49,11 @@ export class DiscordMusicBot {
         }
       } catch (error) {
         logger.error('Error handling interaction:', error);
-        if (interaction.isCommand()) {
-          if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: 'An error occurred while processing your command.', ephemeral: true });
-          } else {
+        if (interaction.isCommand() && !interaction.replied && !interaction.deferred) {
+          try {
             await interaction.reply({ content: 'An error occurred while processing your command.', ephemeral: true });
+          } catch (replyError) {
+            logger.debug('[Discord] Could not reply to failed interaction:', replyError);
           }
         }
       }
@@ -80,35 +84,45 @@ export class DiscordMusicBot {
         logger.info(`[Discord] Play command received with query: ${query}`);
         logger.info(`[Discord] Query type: ${query.includes('youtube.com') || query.includes('youtu.be') ? 'YouTube URL' : 'Search term'}`);
         
-        // Defer reply as searching might take time
-        await interaction.deferReply();
-        
-        // Send initial progress message
-        await interaction.editReply('🔍 Searching for your song...');
-        
-        // Update progress
-        await interaction.editReply('🎧 Loading audio stream...');
-        
-        logger.info(`[Discord] Passing to music manager: ${query}`);
-        const result = await this.musicManager.play(
-          interaction.guild!,
-          member.voice.channel as VoiceChannel,
-          query,
-          member.user.tag
-        );
-        
-        await interaction.editReply(result.message);
-        
-        // If successfully playing, show lyrics
-        if (result.success && result.message.includes('Now playing')) {
-          try {
-            const lyrics = await this.lyricsService.searchLyrics(query);
-            if (lyrics) {
-              const embed = this.lyricsService.formatLyricsEmbed(lyrics, true);
-              await interaction.followUp({ embeds: [embed] });
+        try {
+          // Defer reply as searching might take time
+          await interaction.deferReply();
+          
+          // Send initial progress message
+          await this.safeEditReply(interaction, '🔍 Searching for your song...');
+          
+          logger.info(`[Discord] Passing to music manager: ${query}`);
+          const result = await this.musicManager.play(
+            interaction.guild!,
+            member.voice.channel as VoiceChannel,
+            query,
+            member.user.tag
+          );
+          
+          await this.safeEditReply(interaction, result.message);
+          
+          // If successfully playing, show lyrics
+          if (result.success && result.message.includes('Now playing')) {
+            try {
+              const lyrics = await this.lyricsService.searchLyrics(query);
+              if (lyrics) {
+                const embed = this.lyricsService.formatLyricsEmbed(lyrics, true);
+                await interaction.followUp({ embeds: [embed] });
+              }
+            } catch (error) {
+              logger.warn('Failed to fetch lyrics:', error);
             }
-          } catch (error) {
-            logger.warn('Failed to fetch lyrics:', error);
+          }
+        } catch (error: any) {
+          logger.error('[Discord] Play command error:', error);
+          if (!interaction.deferred && !interaction.replied) {
+            try {
+              await interaction.reply({ content: '❌ An error occurred while processing your request.', ephemeral: true });
+            } catch {
+              // Ignore if we can't reply
+            }
+          } else {
+            await this.safeEditReply(interaction, '❌ An error occurred while processing your request.');
           }
         }
         break;
@@ -171,70 +185,118 @@ export class DiscordMusicBot {
 
   private async handleAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
     const focusedValue = interaction.options.getFocused();
-    logger.info(`Autocomplete triggered for: "${focusedValue}"`);
+    const userId = interaction.user.id;
+    const interactionKey = `${userId}-${focusedValue}`;
     
     if (interaction.commandName === 'play') {
       try {
-        // Check if the interaction is still valid
-        if (!interaction || !interaction.respond) {
-          logger.warn('Invalid autocomplete interaction');
-          return;
-        }
-
+        // Return empty for short queries
         if (!focusedValue || focusedValue.length < 2) {
-          await interaction.respond([]);
+          await this.safeRespond(interaction, []);
           return;
         }
 
-        // Search YouTube for suggestions with timeout
-        logger.info(`Searching YouTube for: ${focusedValue}`);
-        const searchPromise = YouTube.search(focusedValue, { limit: 5, type: 'video' });
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Search timeout')), 2500)
-        );
-        
-        const results = await Promise.race([searchPromise, timeoutPromise]) as any[];
-        logger.info(`Found ${results.length} results`);
-        
-        // Log first result structure for debugging
-        if (results.length > 0) {
-          logger.info('First result structure:', {
-            title: results[0].title,
-            url: results[0].url,
-            link: results[0].link,
-            id: results[0].id,
-            keys: Object.keys(results[0])
-          });
+        // Check cache first
+        const cached = this.autocompleteCache.get(focusedValue.toLowerCase());
+        if (cached && Date.now() - cached.timestamp < this.CACHE_DURATION) {
+          logger.debug(`[Discord] Using cached results for: "${focusedValue}"`);
+          await this.safeRespond(interaction, cached.results);
+          return;
         }
-        
-        const choices = results.map((video: any) => {
-          const url = video.url || video.link || `https://www.youtube.com/watch?v=${video.id}`;
-          logger.debug(`[Discord] Autocomplete mapping - Title: ${video.title}, URL: ${url}`);
-          return {
-            name: video.title && video.title.length > 100 ? video.title.substring(0, 97) + '...' : (video.title || 'Unknown'),
-            value: url,
-          };
-        });
-        
-        logger.info(`[Discord] Sending ${choices.length} autocomplete choices`);
-        choices.forEach((choice, index) => {
-          logger.info(`[Discord] Choice ${index + 1}: ${choice.name} -> ${choice.value}`);
-        });
-        await interaction.respond(choices);
-      } catch (error: any) {
-        logger.error('Autocomplete error:', {
-          message: error?.message || 'Unknown error',
-          stack: error?.stack,
-          name: error?.name,
-          code: error?.code
-        });
-        try {
-          if (interaction && interaction.respond) {
-            await interaction.respond([]);
+
+        // Clear existing debounce for this user
+        const existingDebounce = this.autocompleteDebounce.get(interactionKey);
+        if (existingDebounce) {
+          clearTimeout(existingDebounce);
+        }
+
+        // Set up debounced search
+        const debounceTimeout = setTimeout(async () => {
+          try {
+            logger.info(`[Discord] Searching YouTube for: "${focusedValue}"`);
+            
+            // Search with timeout
+            const searchPromise = YouTube.search(focusedValue, { limit: 5, type: 'video' });
+            const timeoutPromise = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Search timeout')), 2000)
+            );
+            
+            const results = await Promise.race([searchPromise, timeoutPromise]) as any[];
+            
+            if (!results || results.length === 0) {
+              await this.safeRespond(interaction, []);
+              return;
+            }
+            
+            const choices = results.map((video: any) => {
+              const url = video.url || video.link || `https://www.youtube.com/watch?v=${video.id}`;
+              return {
+                name: video.title && video.title.length > 100 
+                  ? video.title.substring(0, 97) + '...' 
+                  : (video.title || 'Unknown'),
+                value: url,
+              };
+            });
+
+            // Cache the results
+            this.autocompleteCache.set(focusedValue.toLowerCase(), {
+              results: choices,
+              timestamp: Date.now()
+            });
+
+            // Clean old cache entries
+            this.cleanCache();
+
+            await this.safeRespond(interaction, choices);
+          } catch (searchError) {
+            logger.error('[Discord] Autocomplete search failed:', searchError);
+            await this.safeRespond(interaction, []);
           }
-        } catch (respondError: any) {
-          logger.error('Failed to respond to autocomplete:', respondError?.message || respondError);
+
+          // Remove from debounce map
+          this.autocompleteDebounce.delete(interactionKey);
+        }, this.DEBOUNCE_DELAY);
+
+        this.autocompleteDebounce.set(interactionKey, debounceTimeout);
+        
+        // For immediate response with empty array to prevent timeout
+        if (!cached) {
+          await this.safeRespond(interaction, []);
         }
+      } catch (error: any) {
+        logger.error('[Discord] Autocomplete error:', error);
+        await this.safeRespond(interaction, []);
+      }
+    }
+  }
+
+  private async safeRespond(interaction: AutocompleteInteraction, choices: any[]): Promise<void> {
+    try {
+      await interaction.respond(choices);
+    } catch (error: any) {
+      // Silently handle errors - interaction likely timed out
+      if (error.code !== 10062 && error.code !== 40060) {
+        logger.debug('[Discord] Failed to respond to autocomplete:', error.message);
+      }
+    }
+  }
+
+  private cleanCache(): void {
+    const now = Date.now();
+    for (const [key, value] of this.autocompleteCache.entries()) {
+      if (now - value.timestamp > this.CACHE_DURATION) {
+        this.autocompleteCache.delete(key);
+      }
+    }
+  }
+
+  private async safeEditReply(interaction: CommandInteraction, content: string): Promise<void> {
+    try {
+      await interaction.editReply(content);
+    } catch (error: any) {
+      // Silently handle errors - interaction might have timed out
+      if (error.code !== 10062) {
+        logger.debug('[Discord] Failed to edit reply:', error.message);
       }
     }
   }
