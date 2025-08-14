@@ -77,6 +77,8 @@ export class DiscordMusicBot {
         }
 
         const query = (interaction as any).options.get('query')?.value as string;
+        logger.info(`[Discord] Play command received with query: ${query}`);
+        logger.info(`[Discord] Query type: ${query.includes('youtube.com') || query.includes('youtu.be') ? 'YouTube URL' : 'Search term'}`);
         
         // Defer reply as searching might take time
         await interaction.deferReply();
@@ -87,6 +89,7 @@ export class DiscordMusicBot {
         // Update progress
         await interaction.editReply('🎧 Loading audio stream...');
         
+        logger.info(`[Discord] Passing to music manager: ${query}`);
         const result = await this.musicManager.play(
           interaction.guild!,
           member.voice.channel as VoiceChannel,
@@ -204,13 +207,19 @@ export class DiscordMusicBot {
           });
         }
         
-        const choices = results.map((video: any) => ({
-          name: video.title && video.title.length > 100 ? video.title.substring(0, 97) + '...' : (video.title || 'Unknown'),
-          value: video.url || video.link || `https://www.youtube.com/watch?v=${video.id}`,
-        }));
+        const choices = results.map((video: any) => {
+          const url = video.url || video.link || `https://www.youtube.com/watch?v=${video.id}`;
+          logger.debug(`[Discord] Autocomplete mapping - Title: ${video.title}, URL: ${url}`);
+          return {
+            name: video.title && video.title.length > 100 ? video.title.substring(0, 97) + '...' : (video.title || 'Unknown'),
+            value: url,
+          };
+        });
         
-        logger.info(`Sending ${choices.length} choices`);
-        logger.info('First choice:', choices[0]);
+        logger.info(`[Discord] Sending ${choices.length} autocomplete choices`);
+        choices.forEach((choice, index) => {
+          logger.info(`[Discord] Choice ${index + 1}: ${choice.name} -> ${choice.value}`);
+        });
         await interaction.respond(choices);
       } catch (error: any) {
         logger.error('Autocomplete error:', {

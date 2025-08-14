@@ -15,6 +15,7 @@ import { QueueItem, Track } from '../types';
 import { config } from '../config';
 import ytdl from 'ytdl-core';
 import play from 'play-dl';
+import distubeYtdl from '@distube/ytdl-core';
 
 export class MusicPlayer {
   private audioPlayer: AudioPlayer;
@@ -150,42 +151,88 @@ export class MusicPlayer {
   }
 
   private async getYouTubeStream(url: string): Promise<any> {
-    // Extract video ID
+    logger.info(`[Player] Starting stream extraction for URL: ${url}`);
+    
+    // Extract and validate video ID
     const videoIdMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/);
     const videoId = videoIdMatch ? videoIdMatch[1] : null;
     
     if (!videoId) {
-      throw new Error('Invalid YouTube URL');
+      logger.error(`[Player] Could not extract video ID from URL: ${url}`);
+      throw new Error('Invalid YouTube URL - could not extract video ID');
     }
-
-    // Method 1: Try ytdl-core first
+    
+    logger.info(`[Player] Extracted video ID: ${videoId}`);
+    
+    // Store errors from each attempt for better error reporting
+    const errors: { method: string; error: any }[] = [];
+    
+    // Enhanced headers for all methods
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Cookie': '',
+    };
+    
+    // Method 1: Try @distube/ytdl-core (more maintained fork)
     try {
-      logger.info('Trying ytdl-core for video ID:', videoId);
+      logger.info('[Player] Attempting with @distube/ytdl-core...');
       
-      // First validate the URL
-      if (!ytdl.validateURL(url)) {
-        throw new Error('Invalid YouTube URL');
+      // Validate URL first
+      if (!distubeYtdl.validateURL(url)) {
+        throw new Error('Invalid YouTube URL format');
       }
       
-      // Get video info first to check availability
-      const info = await ytdl.getInfo(url, {
-        requestOptions: {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Cookie': '',
-          },
-        },
+      // Get video info with custom headers
+      const info = await distubeYtdl.getInfo(url, {
+        requestOptions: { headers },
       });
       
-      // Check if video is available
       if (!info.videoDetails) {
         throw new Error('Video details not available');
       }
       
-      logger.info(`Found video with ytdl-core: ${info.videoDetails.title}`);
+      logger.info(`[Player] @distube/ytdl-core found video: ${info.videoDetails.title}`);
       
-      // Create the stream with enhanced options
+      // Create stream with optimized settings
+      const stream = distubeYtdl.downloadFromInfo(info, {
+        filter: 'audioonly',
+        quality: 'highestaudio',
+        highWaterMark: 1 << 25, // 32MB buffer
+        dlChunkSize: 0,
+      });
+      
+      logger.info('[Player] Successfully created stream with @distube/ytdl-core');
+      return stream;
+    } catch (distubeError: any) {
+      errors.push({ method: '@distube/ytdl-core', error: distubeError });
+      logger.warn('[Player] @distube/ytdl-core failed:', {
+        error: distubeError.message || String(distubeError),
+        statusCode: distubeError.statusCode,
+        url: url
+      });
+    }
+    
+    // Method 2: Try original ytdl-core
+    try {
+      logger.info('[Player] Attempting with ytdl-core...');
+      
+      if (!ytdl.validateURL(url)) {
+        throw new Error('Invalid YouTube URL format');
+      }
+      
+      const info = await ytdl.getInfo(url, {
+        requestOptions: { headers },
+      });
+      
+      if (!info.videoDetails) {
+        throw new Error('Video details not available');
+      }
+      
+      logger.info(`[Player] ytdl-core found video: ${info.videoDetails.title}`);
+      
       const stream = ytdl.downloadFromInfo(info, {
         filter: 'audioonly',
         quality: 'highestaudio',
@@ -193,53 +240,78 @@ export class MusicPlayer {
         dlChunkSize: 0,
       });
       
-      logger.info('Created audio stream with ytdl-core');
+      logger.info('[Player] Successfully created stream with ytdl-core');
       return stream;
     } catch (ytdlError: any) {
-      logger.warn('ytdl-core failed:', ytdlError.message || ytdlError);
-      
-      // Method 2: Try play-dl as fallback
-      try {
-        logger.info('Trying play-dl as fallback...');
-        
-        // Validate with play-dl
-        const validated = await play.validate(url);
-        if (validated !== 'yt_video') {
-          throw new Error('Not a valid YouTube video URL');
-        }
-        
-        // Get video info
-        const info = await play.video_info(url);
-        if (!info || !info.video_details) {
-          throw new Error('Could not get video details');
-        }
-        
-        logger.info(`Found video with play-dl: ${info.video_details.title}`);
-        
-        // Create stream
-        const stream = await play.stream(url, {
-          quality: 2, // 0 = 144p, 1 = 360p, 2 = 720p/highest
-        });
-        
-        logger.info('Created audio stream with play-dl');
-        return stream.stream;
-      } catch (playError: any) {
-        logger.error('play-dl also failed:', playError.message || playError);
-        
-        // Determine the best error message
-        if (ytdlError.message?.includes('Status code: 410') || playError.message?.includes('410')) {
-          throw new Error('This video is not accessible (YouTube blocked access)');
-        } else if (ytdlError.message?.includes('Sign in to confirm')) {
-          throw new Error('This video requires sign-in (age-restricted or private)');
-        } else if (ytdlError.message?.includes('private video')) {
-          throw new Error('This video is private');
-        } else if (ytdlError.message?.includes('Video unavailable')) {
-          throw new Error('This video is unavailable');
-        }
-        
-        throw new Error(`Failed to play video: ${ytdlError.message || playError.message || 'Unknown error'}`);
-      }
+      errors.push({ method: 'ytdl-core', error: ytdlError });
+      logger.warn('[Player] ytdl-core failed:', {
+        error: ytdlError.message || String(ytdlError),
+        statusCode: ytdlError.statusCode,
+        url: url
+      });
     }
+    
+    // Method 3: Try play-dl as last resort
+    try {
+      logger.info('[Player] Attempting with play-dl...');
+      
+      // Validate with play-dl
+      const validated = await play.validate(url);
+      if (validated !== 'yt_video') {
+        throw new Error(`Not a valid YouTube video URL (type: ${validated})`);
+      }
+      
+      // Get video info
+      const info = await play.video_info(url);
+      if (!info || !info.video_details) {
+        throw new Error('Could not get video details');
+      }
+      
+      logger.info(`[Player] play-dl found video: ${info.video_details.title}`);
+      
+      // Create stream
+      const stream = await play.stream(url, {
+        quality: 2, // highest quality
+      });
+      
+      logger.info('[Player] Successfully created stream with play-dl');
+      return stream.stream;
+    } catch (playError: any) {
+      errors.push({ method: 'play-dl', error: playError });
+      logger.error('[Player] play-dl also failed:', {
+        error: playError.message || String(playError),
+        url: url
+      });
+    }
+    
+    // All methods failed - analyze errors and provide helpful message
+    logger.error('[Player] All extraction methods failed:', {
+      url: url,
+      videoId: videoId,
+      attempts: errors.map(e => ({
+        method: e.method,
+        error: e.error.message || String(e.error),
+        statusCode: e.error.statusCode
+      }))
+    });
+    
+    // Determine the best error message based on common patterns
+    const errorMessages = errors.map(e => e.error.message || '').join(' ');
+    
+    if (errorMessages.includes('Status code: 410') || errorMessages.includes('410')) {
+      throw new Error('This video is not accessible. YouTube has blocked access - the video may be deleted or region-restricted.');
+    } else if (errorMessages.includes('Sign in to confirm') || errorMessages.includes('age')) {
+      throw new Error('This video requires sign-in (age-restricted content). Try a different video.');
+    } else if (errorMessages.includes('private')) {
+      throw new Error('This video is private and cannot be played.');
+    } else if (errorMessages.includes('unavailable')) {
+      throw new Error('This video is unavailable. It may have been removed or made private.');
+    } else if (errorMessages.includes('429')) {
+      throw new Error('YouTube rate limit reached. Please try again in a few moments.');
+    }
+    
+    // Generic error with all method details
+    throw new Error(`Failed to extract audio stream. All methods failed. URL: ${url}`);
   }
 
   pause(): boolean {

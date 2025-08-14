@@ -37,10 +37,8 @@
     "tsx": "^4.20.4",
     "typescript": "^5.9.2",
     "winston": "^3.17.0",
-    "youtube-dl-exec": "^3.0.24",
-    "youtube-sr": "^4.3.0",
-    "youtubei.js": "^15.0.1",
-    "yt-stream": "^1.7.4",
+    "@distube/ytdl-core": "^4.16.12",
+    "youtube-sr": "^4.3.11",
     "ytdl-core": "^4.11.5"
   },
   "devDependencies": {
