@@ -97,6 +97,7 @@ export class DiscordMusicBot {
             member.user.tag
           );
           
+          logger.info(`[Discord] Sending response to user: ${result.success ? 'Success' : 'Error'} - ${result.message.substring(0, 100)}...`);
           await this.safeEditReply(interaction, result.message);
           
           // If successfully playing, show lyrics

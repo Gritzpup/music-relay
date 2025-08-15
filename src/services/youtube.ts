@@ -17,7 +17,23 @@ export class YouTubeService {
       // Check if it's a YouTube URL
       if (this.isYouTubeUrl(query)) {
         logger.info(`[YouTube] Detected YouTube URL, extracting track info from: ${query}`);
-        return await this.getTrackFromUrl(query);
+        const track = await this.getTrackFromUrl(query);
+        
+        // If URL extraction failed, try searching by video ID as fallback
+        if (!track) {
+          const videoId = this.extractVideoId(query);
+          if (videoId) {
+            logger.info(`[YouTube] URL extraction failed, trying text search with video ID: ${videoId}`);
+            // Remove the URL check temporarily to search by ID
+            const isUrl = this.isYouTubeUrl;
+            this.isYouTubeUrl = () => false;
+            const searchResult = await this.search(videoId);
+            this.isYouTubeUrl = isUrl;
+            return searchResult;
+          }
+        }
+        
+        return track;
       }
 
       // Search using youtube-sr first (simpler API)
@@ -207,6 +223,37 @@ export class YouTubeService {
 
     // All methods failed
     logger.error('[YouTube] All methods failed to get track info from URL:', { url, videoId });
+    
+    // Try one last fallback - search by video ID as text
+    logger.info(`[YouTube] All extraction methods failed, trying search fallback for video ID: ${videoId}`);
+    try {
+      const searchResults = await YouTube.search(videoId, { limit: 1, type: 'video' });
+      
+      if (searchResults && searchResults.length > 0) {
+        const video = searchResults[0];
+        logger.info(`[YouTube] Found video via search fallback: ${video.title} - ${video.url}`);
+        
+        // Make sure the found video matches our original video ID
+        const foundVideoId = this.extractVideoId(video.url);
+        if (foundVideoId === videoId) {
+          return {
+            title: String(video.title || 'Unknown Title'),
+            url: String(url), // Use original URL, not search result URL
+            duration: video.duration || 0,
+            thumbnail: String(video.thumbnail?.displayThumbnailURL() || ''),
+            requestedBy: '',
+          };
+        } else {
+          logger.warn(`[YouTube] Search fallback found different video: ${foundVideoId} != ${videoId}`);
+        }
+      }
+    } catch (fallbackError) {
+      logger.error('[YouTube] Search fallback also failed:', {
+        error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+        videoId: videoId
+      });
+    }
+    
     return null;
   }
 

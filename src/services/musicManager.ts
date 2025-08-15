@@ -1,6 +1,7 @@
 import { Guild, VoiceChannel } from 'discord.js';
 import { MusicPlayer } from './player';
 import { YouTubeService } from './youtube';
+import { logger } from '../utils/logger';
 // imports cleaned up
 
 export class MusicManager {
@@ -25,10 +26,22 @@ export class MusicManager {
   async play(guild: Guild, channel: VoiceChannel, query: string, requestedBy: string): Promise<{ success: boolean; message: string }> {
     const player = this.getPlayer(guild.id);
     
+    logger.info(`[MusicManager] Starting play request for query: ${query}`);
+    
     // Search for track
     const track = await this.youtubeService.search(query);
     
     if (!track) {
+      // Check if it was a YouTube URL that failed extraction
+      if (query.includes('youtube.com') || query.includes('youtu.be')) {
+        const errorMessage = '❌ Failed to extract audio from YouTube URL.\n\n**YouTube is currently blocking extraction.**\n\n💡 **Try these alternatives:**\n• Search by song name instead of using the URL\n• Try: artist name + song title\n• Use the autocomplete suggestions';
+        logger.info(`[MusicManager] Returning YouTube extraction error to user for URL: ${query}`);
+        return { 
+          success: false, 
+          message: errorMessage
+        };
+      }
+      logger.info(`[MusicManager] No results found for search query: ${query}`);
       return { success: false, message: '❌ No results found for your query.' };
     }
     
