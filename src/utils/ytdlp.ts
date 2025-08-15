@@ -104,8 +104,9 @@ export class YtDlpExtractor {
       const stream = this.ytDlpWrap.execStream(args);
       
       // Handle stream errors
-      stream.on('error', (error) => {
-        logger.error('[YtDlp] Stream error:', error);
+      stream.on('error', (error: any) => {
+        const errorMessage = typeof error === 'string' ? error : (error.message || String(error));
+        logger.error('[YtDlp] Stream error:', errorMessage);
       });
       
       // Log progress
