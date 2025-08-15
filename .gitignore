@@ -29,3 +29,8 @@ Thumbs.db
 # Test coverage
 coverage/
 .nyc_output/
+
+# yt-dlp files
+yt-dlp
+yt-dlp.exe
+cookies.txt

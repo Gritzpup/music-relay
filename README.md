@@ -35,7 +35,13 @@ A Discord bot that plays music from YouTube with ad-free playback capabilities.
    # Edit .env with your Discord bot token
    ```
 
-3. **Run the bot**
+3. **Setup YouTube authentication (recommended)**
+   ```bash
+   node scripts/setup-cookies.js
+   ```
+   This helps bypass YouTube's bot detection. Follow the instructions to export cookies from your browser.
+
+4. **Run the bot**
    ```bash
    # Development
    npm run dev

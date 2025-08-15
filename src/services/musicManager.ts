@@ -59,26 +59,31 @@ export class MusicManager {
     try {
       const queueItem = await player.addToQueue(track);
       const queueLength = player.getQueue().length;
-      
-      // Wait a moment to see if the track starts playing or encounters an error
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
       const currentTrack = player.getCurrentTrack();
       
+      // If this is the first track, wait for it to actually start playing
       if (currentTrack?.id === queueItem.id) {
-        // Check if there was an error
-        if ((currentTrack as any).error) {
-          const errorMsg = (currentTrack as any).error;
-          
-          // Provide helpful suggestions based on the error
-          if (errorMsg.includes('YouTube blocked access') || errorMsg.includes('Sign in to confirm')) {
-            return { 
-              success: false, 
-              message: `❌ YouTube is blocking access to this video.\n\n💡 **Try these alternatives:**\n• Search for a cover or live version\n• Try the artist's topic channel (e.g., "${query} topic")\n• Search for the song on other platforms\n• Try a slightly different search term` 
-            };
+        logger.info(`[MusicManager] Waiting for playback to start for: ${track.title}`);
+        const started = await player.waitForPlaybackStart(15000); // Wait up to 15 seconds
+        
+        if (!started) {
+          // Check if there was an error
+          const errorTrack = player.getCurrentTrack();
+          if (errorTrack && (errorTrack as any).error) {
+            const errorMsg = (errorTrack as any).error;
+            
+            // Provide helpful suggestions based on the error
+            if (errorMsg.includes('YouTube blocked access') || errorMsg.includes('Sign in to confirm') || errorMsg.includes('bot')) {
+              return { 
+                success: false, 
+                message: `❌ YouTube is blocking access to this video.\n\n**${errorMsg}**\n\n💡 **Try these alternatives:**\n• Run \`node scripts/setup-cookies.js\` for cookie setup instructions\n• Search for a different version of the song\n• Try the artist's topic channel (e.g., "${query} topic")\n• Use a slightly different search term` 
+              };
+            }
+            
+            return { success: false, message: `❌ Failed to play: ${errorMsg}` };
           }
           
-          return { success: false, message: `❌ Failed to play: ${errorMsg}` };
+          return { success: false, message: '❌ Failed to start playback. Please try again.' };
         }
         
         return { success: true, message: `🎵 Now playing: **${track.title}**\n🔗 <${track.url}>` };

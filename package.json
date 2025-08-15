@@ -38,6 +38,7 @@
     "typescript": "^5.9.2",
     "winston": "^3.17.0",
     "youtube-sr": "^4.3.11",
+    "yt-dlp-wrap": "^2.3.12",
     "ytdl-core": "^4.11.5"
   },
   "devDependencies": {

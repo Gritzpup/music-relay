@@ -15,15 +15,20 @@ import { QueueItem, Track } from '../types';
 import { config } from '../config';
 import ytdl from 'ytdl-core';
 import play from 'play-dl';
+import { ytDlpExtractor } from '../utils/ytdlp';
+import { EventEmitter } from 'events';
 
-export class MusicPlayer {
+export class MusicPlayer extends EventEmitter {
   private audioPlayer: AudioPlayer;
   private connection?: VoiceConnection;
   private queue: QueueItem[] = [];
   private currentTrack?: QueueItem;
   private isPaused: boolean = false;
   private volume: number;
+  private playbackStartPromise?: { resolve: (success: boolean) => void; reject: (error: any) => void };
+  
   constructor() {
+    super();
     this.audioPlayer = createAudioPlayer();
     this.volume = config.music.defaultVolume / 100;
     this.setupPlayerHandlers();
@@ -48,6 +53,11 @@ export class MusicPlayer {
 
     this.audioPlayer.on(AudioPlayerStatus.Playing, () => {
       logger.info('Audio player started playing');
+      if (this.playbackStartPromise) {
+        this.playbackStartPromise.resolve(true);
+        this.playbackStartPromise = undefined;
+      }
+      this.emit('trackStart', this.currentTrack);
     });
 
     this.audioPlayer.on(AudioPlayerStatus.Buffering, () => {
@@ -96,6 +106,25 @@ export class MusicPlayer {
     return queueItem;
   }
 
+  // Wait for the current track to start playing or fail
+  async waitForPlaybackStart(timeoutMs: number = 10000): Promise<boolean> {
+    if (!this.currentTrack) {
+      return false;
+    }
+
+    return new Promise((resolve, reject) => {
+      this.playbackStartPromise = { resolve, reject };
+      
+      // Set a timeout in case playback never starts
+      setTimeout(() => {
+        if (this.playbackStartPromise) {
+          this.playbackStartPromise = undefined;
+          resolve(false);
+        }
+      }, timeoutMs);
+    });
+  }
+
   private async playNext(): Promise<void> {
     if (this.queue.length === 0) {
       logger.info('Queue is empty, nothing to play');
@@ -136,15 +165,23 @@ export class MusicPlayer {
       this.audioPlayer.play(resource);
       logger.info('Audio resource sent to player');
     } catch (error: any) {
-      logger.error('Failed to play track:', error.message || error);
+      const errorMessage = typeof error === 'string' ? error : (error.message || 'Unknown error');
+      logger.error('Failed to play track:', errorMessage);
       logger.error(`Track URL was: ${String(this.currentTrack?.url)}`);
       logger.error(`Track title was: ${String(this.currentTrack?.title)}`);
       
       // Store the error message to potentially notify the user
       if (this.currentTrack) {
-        (this.currentTrack as any).error = error.message;
+        (this.currentTrack as any).error = errorMessage;
       }
       
+      // Resolve the playback promise as failed
+      if (this.playbackStartPromise) {
+        this.playbackStartPromise.resolve(false);
+        this.playbackStartPromise = undefined;
+      }
+      
+      this.emit('trackError', this.currentTrack, errorMessage);
       this.playNext();
     }
   }
@@ -175,7 +212,24 @@ export class MusicPlayer {
       'Cookie': '',
     };
     
-    // Method 1: Try play-dl first (most reliable currently)
+    // Method 1: Try yt-dlp first (most reliable with cookie support)
+    try {
+      logger.info('[Player] Attempting with yt-dlp...');
+      
+      // Get stream directly from yt-dlp
+      const stream = await ytDlpExtractor.getAudioStream(url);
+      
+      logger.info('[Player] Successfully created stream with yt-dlp');
+      return stream;
+    } catch (ytDlpError: any) {
+      errors.push({ method: 'yt-dlp', error: ytDlpError });
+      logger.warn('[Player] yt-dlp failed:', {
+        error: ytDlpError.message || String(ytDlpError),
+        url: url
+      });
+    }
+    
+    // Method 2: Try play-dl as fallback
     try {
       logger.info('[Player] Attempting with play-dl...');
       
@@ -208,7 +262,7 @@ export class MusicPlayer {
       });
     }
     
-    // Method 2: Try ytdl-core as fallback
+    // Method 3: Try ytdl-core as last resort
     try {
       logger.info('[Player] Attempting with ytdl-core...');
       
