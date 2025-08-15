@@ -2,6 +2,8 @@ import { config, validateConfig } from './config';
 import { logger } from './utils/logger';
 import { DiscordMusicBot } from './services/discord';
 import { getFFmpegPath } from './config/ffmpeg';
+import * as fs from 'fs';
+import * as path from 'path';
 
 let musicBot: DiscordMusicBot;
 
@@ -13,6 +15,15 @@ async function start() {
     const ffmpegPath = getFFmpegPath();
     if (ffmpegPath) {
       logger.info(`FFmpeg available at: ${ffmpegPath}`);
+    }
+    
+    // Check for cookies.txt file
+    const cookiesPath = path.join(process.cwd(), 'cookies.txt');
+    if (fs.existsSync(cookiesPath)) {
+      logger.info('✅ cookies.txt found - YouTube authentication enabled');
+    } else {
+      logger.warn('⚠️ cookies.txt not found - YouTube may block some videos');
+      logger.warn('💡 Run "node scripts/setup-cookies.js" for setup instructions');
     }
     
     // Validate configuration

@@ -138,19 +138,17 @@ export class MusicPlayer extends EventEmitter {
     }
 
     try {
-      logger.info(`Playing: ${String(this.currentTrack.title)}`);
-      logger.info(`URL: ${String(this.currentTrack.url)}`);
+      const trackUrl = String(this.currentTrack.url);
+      const trackTitle = String(this.currentTrack.title);
+      
+      logger.info(`Playing: ${trackTitle}`);
+      logger.info(`URL: ${trackUrl}`);
       
       let stream;
       let streamType = StreamType.Arbitrary;
       
-      // Check if URL needs stream extraction
-      if (this.currentTrack.url.includes('youtube.com') || this.currentTrack.url.includes('youtu.be')) {
-        stream = await this.getYouTubeStream(this.currentTrack.url);
-      } else {
-        // Use URL directly if it's already a stream URL
-        stream = this.currentTrack.url;
-      }
+      // Always extract stream for URLs (YouTube or otherwise)
+      stream = await this.getYouTubeStream(trackUrl);
       
       // Create audio resource with volume
       const resource = createAudioResource(stream, {
@@ -166,9 +164,11 @@ export class MusicPlayer extends EventEmitter {
       logger.info('Audio resource sent to player');
     } catch (error: any) {
       const errorMessage = typeof error === 'string' ? error : (error.message || 'Unknown error');
-      logger.error('Failed to play track:', errorMessage);
-      logger.error(`Track URL was: ${String(this.currentTrack?.url)}`);
-      logger.error(`Track title was: ${String(this.currentTrack?.title)}`);
+      logger.error('Failed to play track:', { 
+        error: errorMessage,
+        url: this.currentTrack?.url ? String(this.currentTrack.url) : 'unknown',
+        title: this.currentTrack?.title ? String(this.currentTrack.title) : 'unknown'
+      });
       
       // Store the error message to potentially notify the user
       if (this.currentTrack) {
@@ -187,14 +187,17 @@ export class MusicPlayer extends EventEmitter {
   }
 
   private async getYouTubeStream(url: string): Promise<any> {
-    logger.info(`[Player] Starting stream extraction for URL: ${url}`);
+    // Ensure URL is a string
+    const urlString = String(url);
+    
+    logger.info(`[Player] Starting stream extraction for URL: ${urlString}`);
     
     // Extract and validate video ID
-    const videoIdMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/);
+    const videoIdMatch = urlString.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/);
     const videoId = videoIdMatch ? videoIdMatch[1] : null;
     
     if (!videoId) {
-      logger.error(`[Player] Could not extract video ID from URL: ${url}`);
+      logger.error(`[Player] Could not extract video ID from URL: ${urlString}`);
       throw new Error('Invalid YouTube URL - could not extract video ID');
     }
     
@@ -217,7 +220,7 @@ export class MusicPlayer extends EventEmitter {
       logger.info('[Player] Attempting with yt-dlp...');
       
       // Get stream directly from yt-dlp
-      const stream = await ytDlpExtractor.getAudioStream(url);
+      const stream = await ytDlpExtractor.getAudioStream(urlString);
       
       logger.info('[Player] Successfully created stream with yt-dlp');
       return stream;
@@ -225,7 +228,7 @@ export class MusicPlayer extends EventEmitter {
       errors.push({ method: 'yt-dlp', error: ytDlpError });
       logger.warn('[Player] yt-dlp failed:', {
         error: ytDlpError.message || String(ytDlpError),
-        url: url
+        url: urlString
       });
     }
     
@@ -234,13 +237,13 @@ export class MusicPlayer extends EventEmitter {
       logger.info('[Player] Attempting with play-dl...');
       
       // Validate with play-dl
-      const validated = await play.validate(url);
+      const validated = await play.validate(urlString);
       if (validated !== 'yt_video') {
         throw new Error(`Not a valid YouTube video URL (type: ${validated})`);
       }
       
       // Get video info
-      const info = await play.video_info(url);
+      const info = await play.video_info(urlString);
       if (!info || !info.video_details) {
         throw new Error('Could not get video details');
       }
@@ -248,7 +251,7 @@ export class MusicPlayer extends EventEmitter {
       logger.info(`[Player] play-dl found video: ${info.video_details.title}`);
       
       // Create stream
-      const stream = await play.stream(url, {
+      const stream = await play.stream(urlString, {
         quality: 2, // highest quality
       });
       
@@ -258,7 +261,7 @@ export class MusicPlayer extends EventEmitter {
       errors.push({ method: 'play-dl', error: playError });
       logger.warn('[Player] play-dl failed:', {
         error: playError.message || String(playError),
-        url: url
+        url: urlString
       });
     }
     
@@ -266,11 +269,11 @@ export class MusicPlayer extends EventEmitter {
     try {
       logger.info('[Player] Attempting with ytdl-core...');
       
-      if (!ytdl.validateURL(url)) {
+      if (!ytdl.validateURL(urlString)) {
         throw new Error('Invalid YouTube URL format');
       }
       
-      const info = await ytdl.getInfo(url, {
+      const info = await ytdl.getInfo(urlString, {
         requestOptions: { headers },
       });
       
@@ -294,13 +297,13 @@ export class MusicPlayer extends EventEmitter {
       logger.error('[Player] ytdl-core also failed:', {
         error: ytdlError.message || String(ytdlError),
         statusCode: ytdlError.statusCode,
-        url: url
+        url: urlString
       });
     }
     
     // All methods failed - analyze errors and provide helpful message
     logger.error('[Player] All extraction methods failed:', {
-      url: url,
+      url: urlString,
       videoId: videoId,
       attempts: errors.map(e => ({
         method: e.method,
@@ -325,7 +328,7 @@ export class MusicPlayer extends EventEmitter {
     }
     
     // Generic error with all method details
-    throw new Error(`Failed to extract audio stream. All methods failed. URL: ${url}`);
+    throw new Error(`Failed to extract audio stream. All methods failed. URL: ${urlString}`);
   }
 
   pause(): boolean {

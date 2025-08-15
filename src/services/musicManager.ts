@@ -57,12 +57,14 @@ export class MusicManager {
     
     // Add to queue (the player will handle getting the stream when it's time to play)
     try {
-      const queueItem = await player.addToQueue(track);
+      // Check if this will be the first track (before adding)
+      const isFirstTrack = !player.getCurrentTrack() && player.getQueue().length === 0;
+      
+      await player.addToQueue(track);
       const queueLength = player.getQueue().length;
-      const currentTrack = player.getCurrentTrack();
       
       // If this is the first track, wait for it to actually start playing
-      if (currentTrack?.id === queueItem.id) {
+      if (isFirstTrack) {
         logger.info(`[MusicManager] Waiting for playback to start for: ${track.title}`);
         const started = await player.waitForPlaybackStart(15000); // Wait up to 15 seconds
         
@@ -80,7 +82,7 @@ export class MusicManager {
               };
             }
             
-            return { success: false, message: `❌ Failed to play: ${errorMsg}` };
+            return { success: false, message: `❌ Failed to play: ${String(errorMsg)}` };
           }
           
           return { success: false, message: '❌ Failed to start playback. Please try again.' };

@@ -66,7 +66,7 @@ export class YtDlpExtractor {
     }
 
     try {
-      logger.info('[YtDlp] Getting video info for:', url);
+      logger.info(`[YtDlp] Getting video info for: ${url}`);
       const output = await this.ytDlpWrap.execPromise(args);
       const info = JSON.parse(output);
       
@@ -76,7 +76,7 @@ export class YtDlpExtractor {
       logger.error('[YtDlp] Failed to get video info:', {
         error: error.message || String(error),
         stderr: error.stderr,
-        url: url
+        url: String(url)
       });
       throw error;
     }
@@ -100,7 +100,7 @@ export class YtDlpExtractor {
     }
 
     try {
-      logger.info('[YtDlp] Starting audio stream extraction for:', url);
+      logger.info(`[YtDlp] Starting audio stream extraction for: ${url}`);
       const stream = this.ytDlpWrap.execStream(args);
       
       // Handle stream errors
@@ -121,7 +121,7 @@ export class YtDlpExtractor {
       logger.error('[YtDlp] Failed to create audio stream:', {
         error: error.message || String(error),
         stderr: error.stderr,
-        url: url
+        url: String(url)
       });
       throw error;
     }
